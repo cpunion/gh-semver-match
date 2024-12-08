@@ -49,6 +49,8 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - uses: actions/checkout@v4
+
       # Test the action with gotray/got v1.1.0
       - name: Test Action
         id: semver
