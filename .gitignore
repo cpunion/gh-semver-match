@@ -4,9 +4,9 @@ node_modules/
 .pnp.js
 
 # Build output
-dist/
 lib/
 build/
+*.backup
 
 # Testing
 coverage/

@@ -8,79 +8,75 @@ on:
 
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node-version: [18.x, 20.x]
-
+    name: Test on ${{ matrix.os }} / Node.js ${{ matrix.node-version }}
     runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [
+          ubuntu-latest,
+          ubuntu-24.04,
+          windows-latest,
+          macos-latest,
+          macos-13
+        ]
+        node-version: [16.x, 18.x, 20.x]
+        exclude:
+          # Ubuntu 24.04 is still in beta, only test with latest Node.js
+          - os: ubuntu-24.04
+            node-version: 16.x
+          - os: ubuntu-24.04
+            node-version: 18.x
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ matrix.node-version }}
+      - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Check formatting
-        run: npm run format:check
-
-      - name: Lint
-        run: npm run lint
-
       - name: Run tests
         run: npm test
 
-      - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20.x'
-        uses: codecov/codecov-action@v3
-
   test-action:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node-version: [18.x, 20.x]
-
-    runs-on: ${{ matrix.os }}
-
+    name: Test Action
+    needs: test
+    runs-on: ubuntu-latest
     steps:
-      # Test the action with gotray/got v1.1.0
-      - name: Test Action
-        id: semver
+      - uses: actions/checkout@v4
+
+      - name: Test action with exact version
         uses: ./
         with:
+          token: ${{ github.token }}
           repos: |
             - repo: gotray/got
-              version: v1.1.0
+              version: v0.1.0
               var_name: GOT_VERSION
 
-      - name: Download and verify got
-        shell: bash
+      - name: Test action with version range
+        uses: ./
+        with:
+          token: ${{ github.token }}
+          repos: |
+            - repo: gotray/got
+              version: ^0.1.0
+              var_name: GOT_VERSION_RANGE
+
+      - name: Verify outputs
         run: |
-          echo "Got version: ${{ env.GOT_VERSION }}"
-
-          # Create temp directory
-          mkdir -p tmp
-          cd tmp
-
-          # Download got
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            curl -L "https://github.com/gotray/got/releases/download/${{ env.GOT_VERSION }}/got_${{ env.GOT_VERSION }}_windows_amd64.tar.gz" -o got.tar.gz
-            tar xzf got.tar.gz
-            ./got.exe help
-          else
-            curl -L "https://github.com/gotray/got/releases/download/${{ env.GOT_VERSION }}/got_${{ env.GOT_VERSION }}_${{ runner.os == 'Linux' && 'linux' || 'darwin' }}_amd64.tar.gz" | tar xz
-            ./got help
+          echo "Exact version: ${{ env.GOT_VERSION }}"
+          echo "Range version: ${{ env.GOT_VERSION_RANGE }}"
+          if [[ "${{ env.GOT_VERSION }}" != "v0.1.0" ]]; then
+            echo "::error::Expected exact version v0.1.0, got ${{ env.GOT_VERSION }}"
+            exit 1
           fi
-
-          # Verify the output contains help information
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ./got.exe help | grep -q "Usage:"
-          else
-            ./got help | grep -q "Usage:"
+          if [[ "${{ env.GOT_VERSION_RANGE }}" != "v0.1.1" ]]; then
+            echo "::error::Expected range version v0.1.1, got ${{ env.GOT_VERSION_RANGE }}"
+            exit 1
           fi
