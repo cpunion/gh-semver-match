@@ -1,92 +1,91 @@
 import * as core from '@actions/core';
 import * as github from '@actions/github';
-import * as semver from 'semver';
 import * as yaml from 'yaml';
+import * as semver from 'semver';
 
-interface RepoInput {
+interface RepoConfig {
   repo: string;
   version: string;
   var_name: string;
 }
 
-async function getVersions(repo: string): Promise<string[]> {
-  const [owner, repoName] = repo.split('/');
-  const octokit = github.getOctokit(process.env.GITHUB_TOKEN || '');
-
-  try {
-    const response = await octokit.rest.repos.listTags({
-      owner,
-      repo: repoName,
-      per_page: 100
-    });
-
-    return response.data.map((tag) => tag.name);
-  } catch (error) {
-    if (error instanceof Error) {
-      throw new Error(`Failed to fetch tags from ${repo}: ${error.message}`);
-    }
-    throw error;
-  }
-}
-
-function findMatchingVersion(versions: string[], constraint: string): string | null {
-  // Handle 'latest' version specially
-  if (constraint.toLowerCase() === 'latest') {
-    return versions[0] || null;
-  }
-
-  // Find all versions that satisfy the constraint
-  const satisfyingVersions = versions.filter((v) => {
-    const cleanVersion = semver.clean(v);
-    return cleanVersion && semver.satisfies(cleanVersion, constraint);
+async function getMatchingVersion(
+  octokit: ReturnType<typeof github.getOctokit>,
+  owner: string,
+  repo: string,
+  constraint: string
+): Promise<string> {
+  // Get all tags
+  const response = await octokit.rest.repos.listTags({
+    owner,
+    repo,
+    per_page: 100
   });
 
-  // Return the highest satisfying version, or null if none found
-  return satisfyingVersions.length > 0 ? satisfyingVersions[0] : null;
+  core.debug(
+    `Found ${response.data.length} tags: ${response.data.map((tag) => tag.name).join(', ')}`
+  );
+
+  // Find matching version
+  const versions = response.data
+    .map((tag) => tag.name)
+    .filter((version) => semver.valid(version)) // semver handles v prefix automatically
+    .sort((a, b) => semver.rcompare(a, b));
+
+  const matchingVersion = versions.find((version) => semver.satisfies(version, constraint));
+
+  if (!matchingVersion) {
+    throw new Error(`No matching version found for ${owner}/${repo} with constraint ${constraint}`);
+  }
+
+  return matchingVersion;
 }
 
 export async function run(): Promise<void> {
   try {
-    const reposInput = core.getInput('repos', { required: true });
-    const repos = yaml.parse(reposInput) as RepoInput[];
+    // Get inputs
+    const token = core.getInput('token', { required: true });
+    const reposYaml = core.getInput('repos', { required: true });
 
-    const results: Record<string, string> = {};
+    // Parse repos config
+    const repos = yaml.parse(reposYaml) as RepoConfig[];
 
-    for (const repo of repos) {
-      const versions = await getVersions(repo.repo);
-      const match = findMatchingVersion(versions, repo.version);
+    // Create octokit instance
+    const octokit = github.getOctokit(token);
 
-      if (!match) {
-        throw new Error(
-          `No matching version found for ${repo.repo} with constraint ${repo.version}`
-        );
-      }
+    // Process each repository
+    for (const config of repos) {
+      core.debug(`Processing repository: ${config.repo}`);
 
-      // Store results for output
-      results[repo.repo] = match;
+      // Split repo into owner and name
+      const [owner, repoName] = config.repo.split('/');
 
-      // Set step outputs
-      const outputId = repo.repo.replace('/', '_');
-      core.setOutput(`${outputId}_version`, match);
+      try {
+        const matchedVersion = await getMatchingVersion(octokit, owner, repoName, config.version);
 
-      // Set environment variable if specified
-      if (repo.var_name) {
-        core.exportVariable(repo.var_name, match);
+        // Set outputs
+        const outputKey = `${owner}_${repoName}_version`.toLowerCase();
+        core.setOutput(outputKey, matchedVersion);
+
+        // Set environment variable if specified
+        if (config.var_name) {
+          core.exportVariable(config.var_name, matchedVersion);
+        }
+      } catch (error) {
+        if (error instanceof Error) {
+          throw new Error(`Failed to process ${config.repo}: ${error.message}`);
+        }
+        throw error;
       }
     }
-
-    // Set combined output
-    core.setOutput('matched_versions', results);
   } catch (error) {
     if (error instanceof Error) {
       core.setFailed(error.message);
-    } else {
-      core.setFailed('An unexpected error occurred');
     }
   }
 }
 
-// Only call run() if this is the main module
+// Only run if this is the main module
 if (require.main === module) {
   run();
 }

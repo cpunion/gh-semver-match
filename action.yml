@@ -1,15 +1,19 @@
 name: 'gh-semver-match'
-description: 'Match semantic versions from GitHub repositories and set as outputs/environment variables'
+description: 'Match semantic versions from repositories'
 author: 'cpunion'
 
 inputs:
+  token:
+    description: 'GitHub token'
+    required: true
+    default: ${{ github.token }}
   repos:
-    description: 'List of repositories to match versions for. Each item should have repo, version, and var_name fields'
+    description: 'List of repositories to match versions from'
     required: true
 
 outputs:
   matched_versions:
-    description: 'The matched versions for each repository'
+    description: 'JSON string of matched versions'
 
 runs:
   using: 'node20'

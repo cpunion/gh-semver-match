@@ -1,75 +1,71 @@
 import * as core from '@actions/core';
+import * as github from '@actions/github';
+import { run } from '../index';
 
-// Mock the GitHub API response
-const mockListTags = jest.fn();
+jest.mock('@actions/core');
+jest.mock('@actions/github');
 
-// Mock the @actions/github module
-jest.mock('@actions/github', () => ({
-  getOctokit: jest.fn(() => ({
+describe('semver-match action', () => {
+  const mockListTags = jest.fn();
+  const mockOctokit = {
     rest: {
       repos: {
         listTags: mockListTags
       }
     }
-  }))
-}));
+  };
 
-// Mock the @actions/core module
-jest.mock('@actions/core', () => ({
-  getMultilineInput: jest.fn(),
-  setOutput: jest.fn(),
-  exportVariable: jest.fn(),
-  setFailed: jest.fn()
-}));
-
-// Import the function after mocking
-import { run } from '../index';
-
-describe('semver-match action', () => {
   beforeEach(() => {
-    // Clear all mocks before each test
     jest.clearAllMocks();
+    (github.getOctokit as jest.Mock).mockReturnValue(mockOctokit);
 
-    // Mock process.env.GITHUB_TOKEN
-    process.env.GITHUB_TOKEN = 'fake-token';
+    // Mock both token and repos inputs
+    const mockInputs: { [key: string]: string } = {
+      token: 'fake-token',
+      repos: `
+        - repo: gotray/got
+          version: v0.1.1
+          var_name: GOT_VERSION
+      `
+    };
+    (core.getInput as jest.Mock).mockImplementation((name: string) => mockInputs[name]);
   });
 
-  it('should match latest version from gotray/got', async () => {
-    // Mock the GitHub API response with real gotray/got tags
-    mockListTags.mockResolvedValueOnce({
-      data: [{ name: 'v0.2.0' }, { name: 'v0.1.1' }, { name: 'v0.1.0' }]
+  it('should match exact version from gotray/got', async () => {
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v0.1.1' }, { name: 'v0.1.0' }]
     });
-
-    // Mock the action input
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({ repo: 'gotray/got', version: 'latest' })
-    ]);
 
     await run();
 
-    // Verify the GitHub API was called correctly
+    expect(github.getOctokit).toHaveBeenCalledWith('fake-token');
     expect(mockListTags).toHaveBeenCalledWith({
       owner: 'gotray',
       repo: 'got',
       per_page: 100
     });
 
-    // Verify outputs were set correctly
-    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v0.2.0');
-    expect(core.setOutput).toHaveBeenCalledWith(
-      'gotray_got_download_url',
-      'https://github.com/gotray/got/releases/download/v0.2.0/got-v0.2.0.tar.gz'
-    );
+    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v0.1.1');
+    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', 'v0.1.1');
   });
 
-  it('should match specific version constraint from gotray/got', async () => {
-    mockListTags.mockResolvedValueOnce({
-      data: [{ name: 'v0.2.0' }, { name: 'v0.1.1' }, { name: 'v0.1.0' }]
+  it('should match partial version constraint from gotray/got', async () => {
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v0.1.1' }, { name: 'v0.1.0' }]
     });
 
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({ repo: 'gotray/got', version: '>= v0.1.0' })
-    ]);
+    // Override only repos input, keep token
+    (core.getInput as jest.Mock).mockImplementation(
+      (name: string) =>
+        ({
+          token: 'fake-token',
+          repos: `
+        - repo: gotray/got
+          version: v0.1
+          var_name: GOT_VERSION
+      `
+        })[name]
+    );
 
     await run();
 
@@ -79,80 +75,151 @@ describe('semver-match action', () => {
       per_page: 100
     });
 
-    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v0.2.0');
-  });
-
-  it('should handle custom download file pattern', async () => {
-    mockListTags.mockResolvedValueOnce({
-      data: [{ name: 'v0.2.0' }, { name: 'v0.1.1' }, { name: 'v0.1.0' }]
-    });
-
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({
-        repo: 'gotray/got',
-        version: 'latest',
-        downloadFile: '${repo}_${version}_linux_amd64.tar.gz'
-      })
-    ]);
-
-    await run();
-
-    expect(core.setOutput).toHaveBeenCalledWith(
-      'gotray_got_download_url',
-      'https://github.com/gotray/got/releases/download/v0.2.0/got_v0.2.0_linux_amd64.tar.gz'
-    );
-  });
-
-  it('should set environment variables when specified', async () => {
-    mockListTags.mockResolvedValueOnce({
-      data: [{ name: 'v0.2.0' }, { name: 'v0.1.1' }, { name: 'v0.1.0' }]
-    });
-
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({
-        repo: 'gotray/got',
-        version: 'latest',
-        env: {
-          version: 'GOT_VERSION',
-          downloadURL: 'GOT_URL'
-        }
-      })
-    ]);
-
-    await run();
-
-    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', 'v0.2.0');
-    expect(core.exportVariable).toHaveBeenCalledWith(
-      'GOT_URL',
-      'https://github.com/gotray/got/releases/download/v0.2.0/got-v0.2.0.tar.gz'
-    );
+    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v0.1.1');
+    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', 'v0.1.1');
   });
 
   it('should handle no matching version', async () => {
-    mockListTags.mockResolvedValueOnce({
-      data: [{ name: 'v0.2.0' }, { name: 'v0.1.1' }, { name: 'v0.1.0' }]
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v0.1.1' }, { name: 'v0.1.0' }]
     });
 
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({ repo: 'gotray/got', version: '>= v1.0.0' })
-    ]);
+    // Override only repos input, keep token
+    (core.getInput as jest.Mock).mockImplementation(
+      (name: string) =>
+        ({
+          token: 'fake-token',
+          repos: `
+        - repo: gotray/got
+          version: v999.0.0
+          var_name: GOT_VERSION
+      `
+        })[name]
+    );
 
     await run();
 
     expect(core.setFailed).toHaveBeenCalledWith(
-      'No matching version found for gotray/got with constraint >= v1.0.0'
+      'Failed to process gotray/got: No matching version found for gotray/got with constraint v999.0.0'
     );
   });
 
   it('should handle API errors', async () => {
-    mockListTags.mockRejectedValueOnce(new Error('API Error'));
-
-    (core.getMultilineInput as jest.Mock).mockReturnValue([
-      JSON.stringify({ repo: 'gotray/got', version: 'latest' })
-    ]);
+    mockListTags.mockRejectedValue(new Error('API Error'));
 
     await run();
 
-    expect(core.setFailed).toHaveBeenCalledWith('Failed to fetch tags from gotray/got: API Error');
+    expect(core.setFailed).toHaveBeenCalledWith('Failed to process gotray/got: API Error');
+  });
+
+  it('should handle wildcards in version constraint', async () => {
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v0.1.1' }, { name: 'v0.1.0' }]
+    });
+
+    // Override only repos input, keep token
+    (core.getInput as jest.Mock).mockImplementation(
+      (name: string) =>
+        ({
+          token: 'fake-token',
+          repos: `
+        - repo: gotray/got
+          version: v0.1.x
+          var_name: GOT_VERSION
+      `
+        })[name]
+    );
+
+    await run();
+
+    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v0.1.1');
+    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', 'v0.1.1');
+  });
+
+  it('should match v1 with highest v1.x.x version', async () => {
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v1.2.3' }, { name: 'v1.2.0' }, { name: 'v1.1.0' }, { name: 'v0.9.0' }]
+    });
+
+    // Test with v1 constraint
+    (core.getInput as jest.Mock).mockImplementation(
+      (name: string) =>
+        ({
+          token: 'fake-token',
+          repos: `
+        - repo: gotray/got
+          version: v1
+          var_name: GOT_VERSION
+      `
+        })[name]
+    );
+
+    await run();
+
+    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', 'v1.2.3');
+    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', 'v1.2.3');
+  });
+
+  it('should match major version with highest matching version', async () => {
+    mockListTags.mockResolvedValue({
+      data: [
+        { name: 'v1.2.3' },
+        { name: '1.2.4' },
+        { name: 'v1.2.0' },
+        { name: '1.1.0' },
+        { name: 'v0.9.0' }
+      ]
+    });
+
+    // Test with major version constraint
+    (core.getInput as jest.Mock).mockImplementation(
+      (name: string) =>
+        ({
+          token: 'fake-token',
+          repos: `
+        - repo: gotray/got
+          version: ^1.0.0
+          var_name: GOT_VERSION
+      `
+        })[name]
+    );
+
+    await run();
+
+    // semver will find the highest version regardless of the v prefix
+    expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', '1.2.4');
+    expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', '1.2.4');
+  });
+
+  it('should handle mixed version formats correctly', async () => {
+    mockListTags.mockResolvedValue({
+      data: [{ name: 'v2.0.0' }, { name: '2.0.1' }, { name: 'v1.9.9' }, { name: '1.9.8' }]
+    });
+
+    const testCases = [
+      { constraint: '^2.0.0', expected: '2.0.1' }, // Select highest 2.x.x version
+      { constraint: 'v2.x.x', expected: '2.0.1' }, // v prefix doesn't affect matching
+      { constraint: '^1.0.0', expected: 'v1.9.9' }, // Select highest 1.x.x version
+      { constraint: 'v1.x.x', expected: 'v1.9.9' } // v prefix doesn't affect matching
+    ];
+
+    for (const testCase of testCases) {
+      (core.getInput as jest.Mock).mockImplementation(
+        (name: string) =>
+          ({
+            token: 'fake-token',
+            repos: `
+          - repo: gotray/got
+            version: ${testCase.constraint}
+            var_name: GOT_VERSION
+        `
+          })[name]
+      );
+
+      await run();
+
+      expect(core.setOutput).toHaveBeenCalledWith('gotray_got_version', testCase.expected);
+      expect(core.exportVariable).toHaveBeenCalledWith('GOT_VERSION', testCase.expected);
+    }
   });
 });
