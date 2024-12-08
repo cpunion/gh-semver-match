@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [18.x, 20.x]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Upload coverage
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20.x'
+        uses: codecov/codecov-action@v3
+
+  test-action:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [18.x, 20.x]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Test the action with gotray/got v1.1.0
+      - name: Test Action
+        id: semver
+        uses: ./
+        with:
+          repos: |
+            - repo: gotray/got
+              version: v1.1.0
+              var_name: GOT_VERSION
+
+      - name: Download and verify got
+        shell: bash
+        run: |
+          echo "Got version: ${{ env.GOT_VERSION }}"
+
+          # Create temp directory
+          mkdir -p tmp
+          cd tmp
+
+          # Download got
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            curl -L "https://github.com/gotray/got/releases/download/${{ env.GOT_VERSION }}/got_${{ env.GOT_VERSION }}_windows_amd64.tar.gz" -o got.tar.gz
+            tar xzf got.tar.gz
+            ./got.exe help
+          else
+            curl -L "https://github.com/gotray/got/releases/download/${{ env.GOT_VERSION }}/got_${{ env.GOT_VERSION }}_${{ runner.os == 'Linux' && 'linux' || 'darwin' }}_amd64.tar.gz" | tar xz
+            ./got help
+          fi
+
+          # Verify the output contains help information
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            ./got.exe help | grep -q "Usage:"
+          else
+            ./got help | grep -q "Usage:"
+          fi
